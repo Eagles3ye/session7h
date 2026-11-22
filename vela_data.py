@@ -9,6 +9,8 @@ conventions:
     BTCUSDT.P          Binance USDT perpetual
     coinbase:BTC-USD   Coinbase Exchange spot
     hyperliquid:BTC    Hyperliquid perp  (spot pairs like PURR/USDC also work)
+    twelve:EUR/USD     Twelve Data forex (needs free TWELVE_KEY)  e.g. twelve:GBP/USD, twelve:NZD/USD
+    PAXGUSDT           Binance spot gold-backed token (tracks gold, 24/7, no key)
     oanda:XAU_USD      OANDA forex / metals (needs OANDA_TOKEN)  e.g. oanda:EUR_USD, oanda:NZD_USD
 
 Like Vela, timeframes an exchange does not serve natively (45m, 3h, ...) are
@@ -21,6 +23,7 @@ and columns: open, high, low, close, volume.
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
@@ -178,8 +181,57 @@ class Oanda(Provider):
         return _frame(rows)
 
 
+class TwelveData(Provider):
+    """Twelve Data REST (twelve:EUR/USD, twelve:GBP/USD, twelve:NZD/USD). Needs a free API key
+    (free plan: 8 requests/min, 800/day). Gold (XAU/USD) market data is listed on paid plans only.
+    4h bars are built from 1h bars aligned to 17:00 New York (TradingView forex convention)."""
+    name = "twelve"
+    fx_align = True
+    GRAN = {"1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min", "1h": "1h", "2h": "2h",
+            "1d": "1day", "1w": "1week", "1M": "1month"}
+    native = set(GRAN)
+    HOST = "https://api.twelvedata.com/time_series"
+
+    @staticmethod
+    def instrument(symbol: str) -> str:
+        s = symbol.upper().replace("_", "/").replace("-", "/")
+        return f"{s[:3]}/{s[3:]}" if "/" not in s and len(s) == 6 else s     # EURUSD -> EUR/USD
+
+    def page(self, symbol, interval, end_ms):
+        key = CONFIG.get("twelve_key")
+        if not key:
+            raise DataError("Twelve Data key missing. Set TWELVE_KEY in Streamlit secrets (see README).")
+        params = {"symbol": self.instrument(symbol), "interval": self.GRAN[interval],
+                  "outputsize": 5000, "timezone": "UTC", "order": "desc"}
+        if end_ms:
+            params["end_date"] = datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        for attempt in range(2):
+            try:
+                r = requests.get(self.HOST, params=params, headers={**UA, "Authorization": f"apikey {key}"},
+                                 timeout=TIMEOUT)
+                j = r.json()
+            except (requests.RequestException, ValueError) as e:
+                raise DataError(f"Twelve Data {symbol}: {type(e).__name__}") from e
+            if r.status_code == 200 and j.get("status") != "error":
+                break
+            code, msg = j.get("code", r.status_code), str(j.get("message", ""))[:200]
+            if code == 429 and "minute" in msg.lower() and attempt == 0:
+                time.sleep(62)                              # free plan: 8 requests / minute
+                continue
+            if end_ms and (code == 404 or "no data" in msg.lower()):
+                return _frame([])                           # paged past the start of history
+            raise DataError(f"Twelve Data {symbol} {interval}: [{code}] {msg}")
+        rows = []
+        for k in j.get("values", []):
+            t = pd.Timestamp(k["datetime"]).tz_localize("UTC")
+            rows.append((int(t.timestamp() * 1000), k["open"], k["high"], k["low"], k["close"],
+                         k.get("volume") or 0))
+        return _frame(rows)
+
+
 # Runtime config (token etc.). The app fills this from Streamlit secrets; env vars also work.
-CONFIG: dict = {"oanda_token": os.environ.get("OANDA_TOKEN"),
+CONFIG: dict = {"twelve_key": os.environ.get("TWELVE_KEY"),
+                "oanda_token": os.environ.get("OANDA_TOKEN"),
                 "oanda_env": os.environ.get("OANDA_ENV", "practice")}
 
 
@@ -187,7 +239,7 @@ def configure(**kw) -> None:
     CONFIG.update({k: v for k, v in kw.items() if v})
 
 
-PROVIDERS: dict[str, Provider] = {p.name: p for p in (Binance(), Coinbase(), Hyperliquid(), Oanda())}
+PROVIDERS: dict[str, Provider] = {p.name: p for p in (Binance(), Coinbase(), Hyperliquid(), Oanda(), TwelveData())}
 
 
 def resolve(symbol: str) -> tuple[Provider, str]:
@@ -216,6 +268,18 @@ def resample(df: pd.DataFrame, interval: str) -> pd.DataFrame:
     out = r.agg(agg).dropna(subset=["open"])
     out.index = out.index.as_unit("ns")
     return out
+
+
+def resample_fx(df: pd.DataFrame, interval: str = "4h") -> pd.DataFrame:
+    """Aggregate to 4h bars whose boundaries sit at 17:00/21:00/01:00/... New York time."""
+    agg = {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+    ny = df.tz_convert("America/New_York")
+    shifted = ny.copy()
+    shifted.index = ny.index.tz_localize(None) - pd.Timedelta(hours=17)
+    out = shifted.resample(interval).agg(agg).dropna(subset=["open"])
+    out.index = (out.index + pd.Timedelta(hours=17)).tz_localize(
+        "America/New_York", ambiguous=True, nonexistent="shift_forward").tz_convert("UTC").as_unit("ns")
+    return out[~out.index.duplicated(keep="last")].sort_index()
 
 
 def _source_interval(prov: Provider, interval: str) -> tuple[str, int]:
@@ -254,6 +318,9 @@ def _paginate(prov: Provider, sym: str, interval: str, limit: int) -> pd.DataFra
 def get_bars(symbol: str, interval: str, limit: int = 1500) -> pd.DataFrame:
     """Fetch `limit` most-recent bars for a Vela-style symbol and interval."""
     prov, sym = resolve(symbol)
+    if getattr(prov, "fx_align", False) and interval == "4h":
+        raw = _paginate(prov, sym, "1h", limit * 4 + 8)
+        return resample_fx(raw, "4h").tail(limit)
     if interval in prov.native:
         return _paginate(prov, sym, interval, limit)
     src, factor = _source_interval(prov, interval)
