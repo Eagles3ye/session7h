@@ -9,6 +9,7 @@ conventions:
     BTCUSDT.P          Binance USDT perpetual
     coinbase:BTC-USD   Coinbase Exchange spot
     hyperliquid:BTC    Hyperliquid perp  (spot pairs like PURR/USDC also work)
+    oanda:XAU_USD      OANDA forex / metals (needs OANDA_TOKEN)  e.g. oanda:EUR_USD, oanda:NZD_USD
 
 Like Vela, timeframes an exchange does not serve natively (45m, 3h, ...) are
 aggregated from a smaller native timeframe; weekly/monthly are built from daily
@@ -19,6 +20,7 @@ and columns: open, high, low, close, volume.
 """
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
@@ -130,7 +132,62 @@ class Hyperliquid(Provider):
         return _frame([(k["t"], k["o"], k["h"], k["l"], k["c"], k["v"]) for k in r.json()])
 
 
-PROVIDERS: dict[str, Provider] = {p.name: p for p in (Binance(), Coinbase(), Hyperliquid())}
+class Oanda(Provider):
+    """OANDA v20 REST (forex + metals, e.g. oanda:EUR_USD, oanda:XAU_USD). Needs an API token.
+
+    Daily/weekly/monthly and H4+ candles are aligned to 17:00 America/New_York, the same
+    convention TradingView uses for forex."""
+    name = "oanda"
+    GRAN = {"1m": "M1", "5m": "M5", "15m": "M15", "30m": "M30", "1h": "H1", "2h": "H2", "4h": "H4",
+            "6h": "H6", "8h": "H8", "12h": "H12", "1d": "D", "1w": "W", "1M": "M"}
+    native = set(GRAN)
+    HOSTS = {"practice": "https://api-fxpractice.oanda.com", "live": "https://api-fxtrade.oanda.com"}
+
+    @staticmethod
+    def instrument(symbol: str) -> str:
+        s = symbol.upper().replace("/", "_").replace("-", "_")
+        return f"{s[:3]}_{s[3:]}" if "_" not in s and len(s) == 6 else s     # XAUUSD -> XAU_USD
+
+    def page(self, symbol, interval, end_ms):
+        token = CONFIG.get("oanda_token")
+        if not token:
+            raise DataError("OANDA token missing. Set OANDA_TOKEN in Streamlit secrets (see README).")
+        host = self.HOSTS.get(CONFIG.get("oanda_env", "practice"), self.HOSTS["practice"])
+        params = {"granularity": self.GRAN[interval], "count": 5000, "price": "M",
+                  "dailyAlignment": 17, "alignmentTimezone": "America/New_York"}
+        if end_ms:
+            params["to"] = f"{end_ms / 1000:.3f}"
+        try:
+            r = requests.get(f"{host}/v3/instruments/{self.instrument(symbol)}/candles", params=params,
+                             headers={**UA, "Authorization": f"Bearer {token}"}, timeout=TIMEOUT)
+        except requests.RequestException as e:
+            raise DataError(f"OANDA {symbol}: {type(e).__name__}") from e
+        if r.status_code == 400 and end_ms:        # paged past the start of history
+            return _frame([])
+        if r.status_code in (401, 403):
+            raise DataError("OANDA rejected the token (HTTP %d). Check OANDA_TOKEN and that OANDA_ENV "
+                            "('practice' or 'live') matches the account the token was created on." % r.status_code)
+        if r.status_code != 200:
+            raise DataError(f"OANDA {symbol} {interval}: HTTP {r.status_code} {r.text[:150]}")
+        rows = []
+        for k in r.json().get("candles", []):
+            m = k.get("mid")
+            if m:
+                rows.append((int(round(pd.Timestamp(k["time"]).timestamp() * 1000)),
+                             m["o"], m["h"], m["l"], m["c"], k.get("volume", 0)))
+        return _frame(rows)
+
+
+# Runtime config (token etc.). The app fills this from Streamlit secrets; env vars also work.
+CONFIG: dict = {"oanda_token": os.environ.get("OANDA_TOKEN"),
+                "oanda_env": os.environ.get("OANDA_ENV", "practice")}
+
+
+def configure(**kw) -> None:
+    CONFIG.update({k: v for k, v in kw.items() if v})
+
+
+PROVIDERS: dict[str, Provider] = {p.name: p for p in (Binance(), Coinbase(), Hyperliquid(), Oanda())}
 
 
 def resolve(symbol: str) -> tuple[Provider, str]:
