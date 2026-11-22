@@ -27,8 +27,11 @@ def rgba(hex_: str, a: float) -> str:
 # ---------------------------------------------------------------- sidebar ----
 with st.sidebar:
     st.header("Data (Vela-style symbols)")
-    symbol = st.text_input("Symbol", "BTCUSDT",
-                           help="BTCUSDT (Binance spot) · BTCUSDT.P (perp) · coinbase:BTC-USD · hyperliquid:BTC")
+    preset = st.selectbox("Market", ["oanda:XAU_USD", "oanda:EUR_USD", "oanda:GBP_USD", "oanda:NZD_USD",
+                                     "BTCUSDT", "Custom…"])
+    symbol = (st.text_input("Custom symbol", "coinbase:BTC-USD",
+                            help="BTCUSDT · BTCUSDT.P · coinbase:BTC-USD · hyperliquid:BTC · oanda:USD_JPY")
+              if preset == "Custom…" else preset)
     interval = st.selectbox("Timeframe", TFS, index=TFS.index("30m"))
     n_bars = st.slider("Bars to load", 500, 5000, 2000, 250)
     view_bars = st.slider("Bars shown on chart", 100, 1500, 400, 50)
@@ -69,6 +72,11 @@ with st.sidebar:
 def load(sym: str, tf: str, n: int) -> pd.DataFrame:
     return vd.get_bars(sym, tf, n)
 
+
+try:                                   # secrets.toml may not exist locally
+    vd.configure(oanda_token=st.secrets.get("OANDA_TOKEN"), oanda_env=st.secrets.get("OANDA_ENV"))
+except Exception:
+    pass
 
 HTF_MAP = {"M": ("1M", 600), "1W": ("1w", 1000), "1D": ("1d", 1500), "H4": ("4h", 1500)}
 
