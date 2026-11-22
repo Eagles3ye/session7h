@@ -27,8 +27,9 @@ def rgba(hex_: str, a: float) -> str:
 # ---------------------------------------------------------------- sidebar ----
 with st.sidebar:
     st.header("Data (Vela-style symbols)")
-    preset = st.selectbox("Market", ["oanda:XAU_USD", "oanda:EUR_USD", "oanda:GBP_USD", "oanda:NZD_USD",
-                                     "BTCUSDT", "Custom…"])
+    preset = st.selectbox("Market", ["twelve:EUR/USD", "twelve:GBP/USD", "twelve:NZD/USD", "PAXGUSDT",
+                                     "BTCUSDT", "oanda:XAU_USD", "Custom…"],
+                          help="PAXGUSDT = gold-backed token on Binance (free, no key, tracks spot gold).")
     symbol = (st.text_input("Custom symbol", "coinbase:BTC-USD",
                             help="BTCUSDT · BTCUSDT.P · coinbase:BTC-USD · hyperliquid:BTC · oanda:USD_JPY")
               if preset == "Custom…" else preset)
@@ -68,13 +69,19 @@ with st.sidebar:
 
 
 # ------------------------------------------------------------------- data ----
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False)
 def load(sym: str, tf: str, n: int) -> pd.DataFrame:
     return vd.get_bars(sym, tf, n)
 
 
+@st.cache_data(ttl=900, show_spinner=False)          # higher-timeframe bars change slowly; saves API credits
+def load_htf(sym: str, tf: str, n: int) -> pd.DataFrame:
+    return vd.get_bars(sym, tf, n)
+
+
 try:                                   # secrets.toml may not exist locally
-    vd.configure(oanda_token=st.secrets.get("OANDA_TOKEN"), oanda_env=st.secrets.get("OANDA_ENV"))
+    vd.configure(oanda_token=st.secrets.get("OANDA_TOKEN"), oanda_env=st.secrets.get("OANDA_ENV"),
+                 twelve_key=st.secrets.get("TWELVE_KEY"))
 except Exception:
     pass
 
@@ -86,7 +93,7 @@ try:
         base = load(symbol, interval, n_bars)
         htf = {}
         for key, (tf, lim) in HTF_MAP.items():
-            htf[key] = base if tf == interval else load(symbol, tf, lim)
+            htf[key] = base if tf == interval else load_htf(symbol, tf, lim)
 except vd.DataError as e:
     st.error(str(e))
     st.info("If Binance is geo-blocked from your host, try `coinbase:BTC-USD` or `hyperliquid:BTC`.")
