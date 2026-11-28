@@ -6,10 +6,12 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
+from streamlit.components.v1 import html as st_html
 
 import indicator as ind
 import ui
 import vela_data as vd
+from strategy import period_end
 from ui import BG, COL, GRID
 
 st.set_page_config(page_title="7H Session Profile", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
@@ -243,7 +245,8 @@ fig.update_yaxes(range=[view_lo - pad, view_hi + pad], row=1, col=1)
 
 # ----------------------------------------------------------------- layout ----
 st.markdown(ui.cards_html(R.table), unsafe_allow_html=True)          # dashboard ABOVE the chart
-st.markdown(ui.legend_html(symbol, interval, base), unsafe_allow_html=True)
+close_ms = int(period_end(base.index[-1], interval).timestamp() * 1000)      # when the current candle closes
+st_html(ui.legend_countdown_html(symbol, interval, base, close_ms), height=40)
 st.plotly_chart(fig, width="stretch",
                 config=dict(scrollZoom=True, displaylogo=False, displayModeBar="hover",
                             modeBarButtonsToRemove=["lasso2d", "select2d", "autoScale2d"]))
