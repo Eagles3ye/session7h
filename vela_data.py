@@ -205,7 +205,13 @@ class TwelveData(Provider):
                   "outputsize": 5000, "timezone": "UTC", "order": "desc"}
         if end_ms:
             params["end_date"] = datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        gap = float(CONFIG.get("twelve_min_gap") or 0)      # optional spacing between calls (free plan limit)
+        if gap:
+            wait = gap - (time.time() - CONFIG.get("_twelve_last", 0.0))
+            if wait > 0:
+                time.sleep(wait)
         for attempt in range(2):
+            CONFIG["_twelve_last"] = time.time()
             try:
                 r = requests.get(self.HOST, params=params, headers={**UA, "Authorization": f"apikey {key}"},
                                  timeout=TIMEOUT)
