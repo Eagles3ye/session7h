@@ -84,6 +84,22 @@ def legend_html(symbol: str, interval: str, base: pd.DataFrame) -> str:
             f'<span><i style="color:{cc}">{chg:+.5g} ({pct:+.2f}%)</i></span></div>')
 
 
+def legend_countdown_html(symbol: str, interval: str, base: pd.DataFrame, close_ms: int) -> str:
+    """Legend + live candle-close countdown as one self-contained HTML page (runs in the browser,
+    ticks every second without reloading the app). `close_ms` = close time of the last bar, UTC epoch ms."""
+    css = ("body{margin:0;background:transparent;font-family:-apple-system,BlinkMacSystemFont,'Trebuchet MS',"
+           "Roboto,Ubuntu,sans-serif}.legend{font-size:13px;color:#d1d4dc;display:flex;flex-wrap:wrap;gap:4px 14px;"
+           "align-items:baseline;padding:6px 2px}.legend b{font-size:15px}.legend .tf{color:#787b86}"
+           ".legend i{font-style:normal;font-weight:500}.cd{margin-left:auto;background:#1e222d;border:1px solid #2a2e39;"
+           "border-radius:999px;padding:1px 10px;color:#f2c94c;font-weight:600;font-variant-numeric:tabular-nums}")
+    body = legend_html(symbol, interval, base).replace("</div>", '<span class="cd" id="cd" title="Time until this candle closes">⏱ --:--</span></div>')
+    js = ("var C=%d;function p(n){return String(n).padStart(2,'0')}function t(){var r=Math.floor((C-Date.now())/1000),"
+          "e=document.getElementById('cd');if(r<=0){e.textContent='⏱ waiting for new bar';return}"
+          "var d=Math.floor(r/86400),h=Math.floor(r%%86400/3600),m=Math.floor(r%%3600/60),s=r%%60;"
+          "e.textContent='⏱ '+(d?d+'d ':'')+(d||h?p(h)+':':'')+p(m)+':'+p(s)}t();setInterval(t,1000);") % close_ms
+    return f"<style>{css}</style>{body}<script>{js}</script>"
+
+
 def gap_breaks(T: pd.DatetimeIndex, step: pd.Timedelta, lo_i: int) -> list:
     """Plotly rangebreaks that hide market-closed gaps (forex weekends) so candles sit side by side like
     TradingView. Returns [] when the bars are not on a regular grid or there are no gaps."""
