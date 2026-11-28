@@ -33,12 +33,12 @@ class Params:
     asia_sess: str = "0430-1130"
     lon_sess: str = "1130-1830"
     ny_sess: str = "1830-0130"
-    m_len: int = 3
-    w_len: int = 3
-    d_len: int = 3
+    m_len: int = 1
+    w_len: int = 1
+    d_len: int = 1
     h4_len: int = 3
-    major_len: int = 5
-    sweep_bars: int = 50
+    major_len: int = 3
+    sweep_bars: int = 5
     max_bars_cisd: int = 6
     req_disp: bool = True
     strict_trend: bool = True
