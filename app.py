@@ -1,22 +1,25 @@
-"""Streamlit front-end for the 7H Session Profile + MTF Structure + H4 CRT indicator."""
+"""Streamlit front-end for the 7H Session Profile + MTF Structure + H4 CRT indicator
+(TradingView-style dark layout: dashboard cards on top, chart below)."""
 from __future__ import annotations
-
-import html
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from plotly.subplots import make_subplots
 
 import indicator as ind
+import ui
 import vela_data as vd
+from ui import BG, COL, GRID
 
-st.set_page_config(page_title="7H Session Profile", page_icon="📈", layout="wide")
+st.set_page_config(page_title="7H Session Profile", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
+st.markdown(ui.CSS, unsafe_allow_html=True)
 
-COL = {"bull": "#089981", "bear": "#f23645", "dead": "#787b86", "eq": "#f2c94c", "gray": "#787b86",
-       "orange": "#ff9800", "dim": "#b2b5be", "act": "#f2c94c", "white": "#ffffff", "crt": "#7a7a7a"}
 BOX = {"ASIA": ("#787b86", "ASIA 7H"), "LONDON": ("#2962ff", "LONDON 7H"), "NEW YORK": ("#089981", "NEW YORK 7H")}
 TFS = ["5m", "15m", "30m", "1h", "4h", "1d", "1w", "1M"]
-TZS = ["Asia/Kolkata", "America/New_York", "UTC", "Europe/London", "Asia/Tokyo"]
+TZS = ["Asia/Kolkata", "Asia/Dubai", "America/New_York", "UTC", "Europe/London", "Asia/Tokyo"]
+MARKETS = ["twelve:EUR/USD", "twelve:GBP/USD", "twelve:NZD/USD", "PAXGUSDT", "BTCUSDT", "ETHUSDT",
+           "oanda:XAU_USD", "Custom…"]
 
 
 def rgba(hex_: str, a: float) -> str:
@@ -24,16 +27,25 @@ def rgba(hex_: str, a: float) -> str:
     return f"rgba({int(h[0:2], 16)},{int(h[2:4], 16)},{int(h[4:6], 16)},{a})"
 
 
-# ---------------------------------------------------------------- sidebar ----
-with st.sidebar:
-    st.header("Data (Vela-style symbols)")
-    preset = st.selectbox("Market", ["twelve:EUR/USD", "twelve:GBP/USD", "twelve:NZD/USD", "PAXGUSDT",
-                                     "BTCUSDT", "oanda:XAU_USD", "Custom…"],
-                          help="PAXGUSDT = gold-backed token on Binance (free, no key, tracks spot gold).")
-    symbol = (st.text_input("Custom symbol", "coinbase:BTC-USD",
+# ---------------------------------------------------------------- top bar ----
+st.markdown('<div class="brand">7H SESSION PROFILE<span>MTF Structure · H4 CRT · CISD</span></div>',
+            unsafe_allow_html=True)
+c_sym, c_tf, c_btn = st.columns([1.5, 3.6, 0.7], vertical_alignment="bottom")
+with c_sym:
+    preset = st.selectbox("Market", MARKETS, label_visibility="collapsed",
+                          help="PAXGUSDT = gold-backed token on Binance (free, no key). twelve:* needs TWELVE_KEY.")
+    symbol = (st.text_input("Custom symbol", "coinbase:BTC-USD", label_visibility="collapsed",
                             help="BTCUSDT · BTCUSDT.P · coinbase:BTC-USD · hyperliquid:BTC · oanda:USD_JPY")
               if preset == "Custom…" else preset)
-    interval = st.selectbox("Timeframe", TFS, index=TFS.index("30m"))
+with c_tf:
+    interval = st.segmented_control("Timeframe", TFS, default="30m", label_visibility="collapsed") or "30m"
+with c_btn:
+    if st.button("↻ Refresh", width="stretch"):
+        st.cache_data.clear()
+
+# ---------------------------------------------------------------- sidebar ----
+with st.sidebar:
+    st.header("Chart")
     n_bars = st.slider("Bars to load", 500, 5000, 2000, 250)
     view_bars = st.slider("Bars shown on chart", 100, 1500, 400, 50)
 
@@ -52,6 +64,7 @@ with st.sidebar:
     show_lines = st.checkbox("Major BOS / sweep lines", True)
     show_eq = st.checkbox("Dealing range 50% EQ line", True)
     show_crt = st.checkbox("H4 PD-filtered CRT sweep lines", True)
+    show_vol = st.checkbox("Volume panel (when data has volume)", True)
 
     st.header("Structure / CRT / CISD")
     m_len = st.number_input("Monthly structure strength", 1, 20, 1)
@@ -63,9 +76,6 @@ with st.sidebar:
     max_bars_cisd = st.slider("Max bars after sweep for CISD", 1, 20, 6)
     req_disp = st.checkbox("Require strong body close (displacement)", True)
     strict_trend = st.checkbox("Strictly filter CISD by Daily trend bias", True)
-
-    if st.button("Refresh data"):
-        st.cache_data.clear()
 
 
 # ------------------------------------------------------------------- data ----
@@ -87,7 +97,6 @@ except Exception:
 
 HTF_MAP = {"M": ("1M", 600), "1W": ("1w", 1000), "1D": ("1d", 1500), "H4": ("4h", 1500)}
 
-st.title("7H Session Profile + MTF Structure + H4 CRT")
 try:
     with st.spinner("Loading candles…"):
         base = load(symbol, interval, n_bars)
@@ -126,11 +135,19 @@ def tx(i: int):
 
 
 view = slice(lo_i, N)
-fig = go.Figure(go.Candlestick(
-    x=T[view], open=base["open"].iloc[view], high=base["high"].iloc[view],
-    low=base["low"].iloc[view], close=base["close"].iloc[view],
+vb = base.iloc[view]
+has_vol = show_vol and float(vb["volume"].sum()) > 0
+fig = make_subplots(rows=2 if has_vol else 1, cols=1, shared_xaxes=True, vertical_spacing=0.015,
+                    row_heights=[0.8, 0.2] if has_vol else [1.0])
+fig.add_trace(go.Candlestick(
+    x=T[view], open=vb["open"], high=vb["high"], low=vb["low"], close=vb["close"],
     increasing_line_color=COL["bull"], increasing_fillcolor=COL["bull"],
-    decreasing_line_color=COL["bear"], decreasing_fillcolor=COL["bear"], name=symbol, showlegend=False))
+    decreasing_line_color=COL["bear"], decreasing_fillcolor=COL["bear"], name=symbol, showlegend=False),
+    row=1, col=1)
+if has_vol:
+    fig.add_trace(go.Bar(x=T[view], y=vb["volume"], showlegend=False, hoverinfo="skip",
+                         marker_color=[rgba(COL["bull"] if c >= o else COL["bear"], 0.55)
+                                       for o, c in zip(vb["open"], vb["close"])]), row=2, col=1)
 
 shapes, notes = [], []
 
@@ -193,41 +210,42 @@ if show_signals:
             label(s["idx"], s["y"], s["text"], "#ffffff", -26 if s["dir"] == 1 else 26, bg=c, size=10)
 
 if show_dots:
-    for d in R.dots:
-        if d["idx"] >= lo_i:
-            fig.add_trace(go.Scatter(x=[tx(d["idx"])], y=[d["y"]], mode="markers", showlegend=False, hoverinfo="skip",
-                                     marker=dict(size=8, color=COL[d["kind"]])))
+    for kind in ("bear", "bull"):
+        pts = [d for d in R.dots if d["kind"] == kind and d["idx"] >= lo_i]
+        if pts:
+            fig.add_trace(go.Scatter(x=[tx(d["idx"]) for d in pts], y=[d["y"] for d in pts], mode="markers",
+                                     showlegend=False, hoverinfo="skip",
+                                     marker=dict(size=8, color=COL[kind], line=dict(width=1, color=BG))),
+                          row=1, col=1)
 
-view_hi = base["high"].iloc[view].max()
-view_lo = base["low"].iloc[view].min()
+# last-price line + tag on the price axis (like TradingView)
+last, last_o = float(base["close"].iloc[-1]), float(base["open"].iloc[-1])
+lc = COL["bull"] if last >= last_o else COL["bear"]
+shapes.append(dict(type="line", xref="paper", x0=0, x1=1, yref="y", y0=last, y1=last,
+                   line=dict(color=lc, width=1, dash="dot")))
+notes.append(dict(xref="paper", x=1, y=last, yref="y", text=f"<b>{ui.pf(last)}</b>", showarrow=False,
+                  xanchor="left", font=dict(color="#ffffff", size=11), bgcolor=lc, borderpad=3))
+
+view_hi, view_lo = float(vb["high"].max()), float(vb["low"].min())
 pad = (view_hi - view_lo) * 0.06
 fig.update_layout(
-    template="plotly_dark", height=720, margin=dict(l=10, r=10, t=10, b=10),
-    shapes=shapes, annotations=notes, xaxis_rangeslider_visible=False, dragmode="pan",
-    paper_bgcolor="#131722", plot_bgcolor="#131722", yaxis=dict(side="right", range=[view_lo - pad, view_hi + pad]),
-    xaxis=dict(range=[tx(lo_i), tx(N + 6)]))
-fig.update_xaxes(gridcolor="#1e222d")
-fig.update_yaxes(gridcolor="#1e222d")
+    template="plotly_dark", height=780 if has_vol else 700, margin=dict(l=4, r=78, t=6, b=6),
+    shapes=shapes, annotations=notes, showlegend=False, dragmode="pan", hovermode="x",
+    paper_bgcolor=BG, plot_bgcolor=BG, font=dict(color="#b2b5be", size=11),
+    hoverlabel=dict(bgcolor="#1e222d", bordercolor="#2a2e39", font=dict(size=12)),
+    xaxis_rangeslider_visible=False)
+fig.update_xaxes(range=[tx(lo_i), tx(N + 6)], showgrid=True, gridcolor=GRID, zeroline=False, showline=False,
+                 showspikes=True, spikemode="across", spikecolor="#758696", spikethickness=1, spikedash="dot",
+                 rangebreaks=ui.gap_breaks(T, step, lo_i))
+fig.update_yaxes(showgrid=True, gridcolor=GRID, zeroline=False, showline=False, side="right",
+                 showspikes=True, spikemode="across", spikecolor="#758696", spikethickness=1, spikedash="dot")
+fig.update_yaxes(range=[view_lo - pad, view_hi + pad], row=1, col=1)
 
-# -------------------------------------------------------------- dashboard ----
-def table_html(rows) -> str:
-    out = ['<table style="border-collapse:collapse;font-size:13px;width:100%;background:#1e222d">']
-    for k, row in enumerate(rows):
-        bg = "#2a2e39" if row["kind"] == "hdr" else ("#1e222d" if k % 2 else "#242834")
-        tds = []
-        for j, (txt, col) in enumerate(row["cells"]):
-            span = ' colspan="3"' if row["kind"] == "merged" and j == 1 else ""
-            tds.append(f'<td{span} style="padding:4px 10px;border:1px solid #363a45;color:{COL[col]};background:{bg}">'
-                       f'{html.escape(str(txt))}</td>')
-        out.append("<tr>" + "".join(tds) + "</tr>")
-    out.append("</table>")
-    return "".join(out)
-
-
-left, right = st.columns([3, 1.15])
-with left:
-    st.plotly_chart(fig, width="stretch", config=dict(scrollZoom=True, displaylogo=False))
-with right:
-    st.markdown(table_html(R.table), unsafe_allow_html=True)
-    st.caption(f"{symbol} · {interval} · last bar {T[-1]:%d %b %Y %H:%M} ({tz}) · "
-               f"HTF bias updates on closed bars; last bar uses the forming HTF bar.")
+# ----------------------------------------------------------------- layout ----
+st.markdown(ui.cards_html(R.table), unsafe_allow_html=True)          # dashboard ABOVE the chart
+st.markdown(ui.legend_html(symbol, interval, base), unsafe_allow_html=True)
+st.plotly_chart(fig, width="stretch",
+                config=dict(scrollZoom=True, displaylogo=False, displayModeBar="hover",
+                            modeBarButtonsToRemove=["lasso2d", "select2d", "autoScale2d"]))
+st.caption(f"{symbol} · {interval} · last bar {T[-1]:%d %b %Y %H:%M} ({tz}) · "
+           f"HTF bias updates on closed bars; the last bar uses the forming HTF bar.")
