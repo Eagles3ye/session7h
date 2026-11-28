@@ -1,0 +1,35 @@
+name: backtest
+
+on:
+  workflow_dispatch:             # run manually: Actions tab -> backtest -> Run workflow
+    inputs:
+      bars:
+        description: "How many 30m bars of history (5000 ~ 5 months forex, ~3.5 months crypto)"
+        default: "5000"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-alerts.txt
+
+      - run: pip install -r requirements-alerts.txt
+
+      - name: Run backtest
+        env:
+          TWELVE_KEY: ${{ secrets.TWELVE_KEY }}
+        run: |
+          python backtest.py --bars "${{ inputs.bars }}" | tee summary.txt
+          { echo '```text'; cat summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backtest-trades
+          path: backtest_trades.csv
